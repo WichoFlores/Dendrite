@@ -129,13 +129,14 @@ def chat(args):
 
     conversation_history = load_conversation_history()
 
-    # t = threading.Thread(
-    #     target=speak_thread, args=(initial_message, playback_finished_event)
-    # )
     conversation_history.append(
         {
             "role": "user",
-            "content": "Your name is Dendrite.Address yourself as such from time to time. Make sure to keep your responses to max 70 tokens all the time, no exceptions. If you understand ONLY answer with a variation of 'Hello', nothing else.",
+            "content": (
+                "Your name is Dendrite. Address yourself as such. "
+                "Limit your responses to a maximum of 70 tokens. "
+                "If you understand, reply only to this message with a variation of 'Hello'. Don't explicitely say you understand."
+            ),
         }
     )
 
@@ -156,7 +157,6 @@ def chat(args):
 
     print("Assistant:", response_text)
 
-    # conversation_history.append({"role": "assistant", "content": initial_message})
     t.start()
     if args.voice:
         playback_finished_event.wait()
