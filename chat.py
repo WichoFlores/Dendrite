@@ -5,15 +5,36 @@ import os
 from playsound import playsound
 from dotenv import load_dotenv
 import threading
-import speech_recognition as sr
 import argparse
 import random
+import speech_recognition as sr
 
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 eleven_labs_key = os.getenv("ELEVEN_LABS_KEY")
 eleven_labs_voice = os.getenv("ELEVEN_LABS_VOICE_ID")
+
+
+def listen_for_input(recognizer, microphone, playback_finished_event):
+    # Wait for the playback to finish
+    playback_finished_event.wait()
+
+    with microphone as source:
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        print("Listening...")
+        audio = recognizer.listen(source)
+
+    try:
+        text = recognizer.recognize_google(audio)
+        print("You said:", text)
+        return text
+    except sr.UnknownValueError:
+        print("Could not understand audio")
+        return None
+    except sr.RequestError as e:
+        print("Could not request results; {0}".format(e))
+        return None
 
 
 def get_initial_message(conversation_history):
@@ -33,29 +54,9 @@ def get_initial_message(conversation_history):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Voice-enabled Chatbot")
-    parser.add_argument("--voice", action="store_true",
-                        help="Enable voice input")
+    parser.add_argument("--voice", action="store_true", help="Enable voice input")
     args = parser.parse_args()
     return args
-
-
-def recognize_speech():
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        print("Calibrating microphone... Please wait.")
-        recognizer.adjust_for_ambient_noise(source, duration=1)
-
-    while True:
-        print("Recognizing...")
-        with sr.Microphone() as source:
-            audio = recognizer.listen(source)
-        try:
-            speech = recognizer.recognize_google(audio)
-            return speech
-        except sr.UnknownValueError:
-            print("Could not understand. Please try again.")
-        except sr.RequestError as e:
-            print(f"Error: {e}. Please try again.")
 
 
 def generate_response(conversation_history):
@@ -70,7 +71,9 @@ def generate_response(conversation_history):
     return message
 
 
-def save_conversation_history(conversation_history, file_path="conversation_history.json"):
+def save_conversation_history(
+    conversation_history, file_path="conversation_history.json"
+):
     with open(file_path, "w") as f:
         json.dump(conversation_history, f)
 
@@ -87,18 +90,15 @@ def load_conversation_history(file_path="conversation_history.json"):
 
 mutex_lock = threading.Lock()
 
-tts_headers = {
-    "Content-Type": "application/json",
-    "xi-api-key": eleven_labs_key
-}
+tts_headers = {"Content-Type": "application/json", "xi-api-key": eleven_labs_key}
 
 
-def eleven_labs_speech(text):
+def eleven_labs_speech(text, playback_finished_event):
     tts_url = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}".format(
-        voice_id=eleven_labs_voice)
+        voice_id=eleven_labs_voice
+    )
     formatted_message = {"text": text}
-    response = requests.post(
-        tts_url, headers=tts_headers, json=formatted_message)
+    response = requests.post(tts_url, headers=tts_headers, json=formatted_message)
 
     if response.status_code == 200:
         with mutex_lock:
@@ -108,6 +108,9 @@ def eleven_labs_speech(text):
             playsound("speech.mpeg", True)
 
             os.remove("speech.mpeg")
+
+        # Signal that playback has finished
+        playback_finished_event.set()
         return True
     else:
         print("Request failed with status code:", response.status_code)
@@ -115,25 +118,55 @@ def eleven_labs_speech(text):
         return False
 
 
-def speak_thread(response):
-    eleven_labs_speech(response)
+def speak_thread(response, playback_finished_event):
+    eleven_labs_speech(response, playback_finished_event)
 
 
-def chat(voice_to_text=False):
+def chat(args):
+    recognizer = sr.Recognizer()
+    microphone = sr.Microphone()
+    playback_finished_event = threading.Event()
+
     conversation_history = load_conversation_history()
-    initial_message = get_initial_message(conversation_history)
-    print("Assistant:", initial_message)
 
-    t = threading.Thread(target=speak_thread, args=(initial_message,))
+    # t = threading.Thread(
+    #     target=speak_thread, args=(initial_message, playback_finished_event)
+    # )
     conversation_history.append(
-        {"role": "assistant", "content": initial_message})
+        {
+            "role": "user",
+            "content": "Your name is Dendrite.Address yourself as such from time to time. Make sure to keep your responses to max 70 tokens all the time, no exceptions. If you understand ONLY answer with a variation of 'Hello', nothing else.",
+        }
+    )
+
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=conversation_history,
+        max_tokens=150,
+        n=1,
+        temperature=0.8,
+    )
+
+    response_text = response.choices[0].message["content"]
+    playback_finished_event.clear()
+    t = threading.Thread(
+        target=speak_thread, args=(response_text, playback_finished_event)
+    )
+    conversation_history.append({"role": "assistant", "content": response_text})
+
+    print("Assistant:", response_text)
+
+    # conversation_history.append({"role": "assistant", "content": initial_message})
     t.start()
+    if args.voice:
+        playback_finished_event.wait()
 
     while True:
-        if voice_to_text:
-            user_input = recognize_speech()
+        if args.voice:
+            user_input = listen_for_input(
+                recognizer, microphone, playback_finished_event
+            )
             if user_input is None:
-                print("Please try again.")
                 continue
         else:
             user_input = input("You: ")
@@ -153,19 +186,23 @@ def chat(voice_to_text=False):
             temperature=0.8,
         )
 
-        response_text = response.choices[0].message['content']
-        t = threading.Thread(target=speak_thread, args=(response_text,))
-        conversation_history.append(
-            {"role": "assistant", "content": response_text})
+        response_text = response.choices[0].message["content"]
+        playback_finished_event.clear()
+        t = threading.Thread(
+            target=speak_thread, args=(response_text, playback_finished_event)
+        )
+        conversation_history.append({"role": "assistant", "content": response_text})
 
         print("Assistant:", response_text)
 
-        # Start a new thread to play the response
+        # Start a new thread to play the response and wait for the playback to finish if voice flag is active
         t.start()
+        if args.voice:
+            playback_finished_event.wait()
 
         save_conversation_history(conversation_history)
 
 
 if __name__ == "__main__":
     args = parse_arguments()
-    chat(voice_to_text=args.voice)
+    chat(args)
