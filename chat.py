@@ -14,6 +14,7 @@ load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 eleven_labs_key = os.getenv("ELEVEN_LABS_KEY")
 eleven_labs_voice = os.getenv("ELEVEN_LABS_VOICE_ID")
+gpt_model = "gpt-4"
 
 
 def listen_for_input(recognizer, microphone, playback_finished_event):
@@ -61,7 +62,7 @@ def parse_arguments():
 
 def generate_response(conversation_history):
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model=gpt_model,
         messages=conversation_history,
         max_tokens=150,
         n=1,
@@ -131,19 +132,19 @@ def chat(args):
 
     conversation_history.append(
         {
-            "role": "user",
+            "role": "system",
             "content": (
-                "Your name is Dendrite. Address yourself as such. "
-                "Limit your responses to a maximum of 70 tokens. "
+                "Your name is Dendrite. Address yourself as such."
+                "Limit your responses to a maximum of 200 tokens."
                 "If you understand, reply only to this message with a variation of 'Hello'. Don't explicitely say you understand."
             ),
         }
     )
 
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model=gpt_model,
         messages=conversation_history,
-        max_tokens=150,
+        max_tokens=300,
         n=1,
         temperature=0.8,
     )
@@ -179,7 +180,7 @@ def chat(args):
         conversation_history.append({"role": "user", "content": user_input})
 
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model=gpt_model,
             messages=conversation_history,
             max_tokens=150,
             n=1,
